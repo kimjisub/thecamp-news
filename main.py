@@ -1,68 +1,78 @@
 import os
-import thecampy
-import feedparser
+import time
 from bs4 import BeautifulSoup
-
+from datetime import datetime
 from dotenv import load_dotenv
+import feedparser
+import pytz
+import thecampy
+
+# Load environment variables
 load_dotenv()
 
-# 환경 변수에서 값 읽기
-soldiers = os.getenv('SOLDIERS').split(',')
-email = os.getenv('EMAIL')
-password = os.getenv('PASSWORD')
-
-thecampy_soldiers = [thecampy.Soldier(soldier) for soldier in soldiers]
-tc = thecampy.Client(email, password)
+# Initialize TheCamp client and soldiers
+soldier_names = os.getenv('SOLDIERS').split(',')
+thecampy_client = thecampy.Client(os.getenv('EMAIL'), os.getenv('PASSWORD'))
+thecampy_soldiers = [thecampy.Soldier(name) for name in soldier_names]
 
 
-def send_to_all(title, content):
+def send_message_to_all(title, content):
+    """Send a message to all soldiers."""
     for soldier in thecampy_soldiers:
-        msg = thecampy.Message(title, content)
-        tc.get_soldier(soldier)
-        tc.send_message(soldier, msg)
+        print(f"Sending to {soldier.name}... ", end='', flush=True)
+        message = thecampy.Message(title, content)
+        thecampy_client.get_soldier(soldier)
+        thecampy_client.send_message(soldier, message)
+        print("Sent.")
+        time.sleep(1)
 
-        # Get News from Rss
 
-def get_articles(url):
+def fetch_articles(rss_feed_url):
+    """Fetch and parse articles from an RSS feed."""
     articles = []
-    feeds = feedparser.parse(url)
+    feeds = feedparser.parse(rss_feed_url)
     for feed in feeds['entries']:
         title = feed['title']
-        summary = BeautifulSoup(feed['summary'], 'html.parser').get_text()
-        if summary[0] == '\n':
-            summary = summary[1:]
-        summary = summary.replace('\n', '<br>')
-        news = {
+        summary = BeautifulSoup(feed['summary'], 'html.parser').get_text().strip().replace('\n', '<br>')
+        articles.append({
             'title': title,
             'summary': summary
-        }
-        articles.append(news)
+        })
     return articles
 
-def articlePaginate(news, max_length):
-    news_texts = []
-    newsContent = ""
-    for item in news:
-        next_content = '# ' + item['title'] + '<br>' + item['summary'] + '<br><br>'
-        if len(newsContent + next_content) > max_length:
-            news_texts.append(newsContent)
-            newsContent = next_content
+
+def paginate_articles(articles, max_length):
+    """Split articles into pages."""
+    pages = []
+    page_content = ""
+    for article in articles:
+        next_article = f"# {article['title']}<br>{article['summary']}<br><br>"
+        if len(page_content + next_article) > max_length:
+            pages.append(page_content)
+            page_content = next_article
         else:
-            newsContent += next_content
-    news_texts.append(newsContent)  # 마지막에 남은 뉴스 텍스트 추가
-    return news_texts
+            page_content += next_article
+    pages.append(page_content)  # Add remaining page content
+    return pages
 
 
-def sendNews(news_provider, articles):
-    pages = articlePaginate(articles, 1400)
-    
+def dispatch_news(provider_name, rss_feed_url):
+    """Fetch articles from an RSS feed, paginate them, and send them to all soldiers."""
+    # Fetch and paginate articles
+    articles = fetch_articles(rss_feed_url)
+    pages = paginate_articles(articles, 1400)
+
+    # Generate date string for current time in KST
+    kst_date = datetime.now(pytz.timezone('Asia/Seoul')).strftime('%Y-%m-%d')
+
+    # Send all pages to all soldiers
     for i, page in enumerate(pages):
-        title = f"{news_provider} ({i+1}/{len(pages)})"
-        print(title)
+        title = f"{kst_date} {provider_name} ({i + 1}/{len(pages)})"
+        print(f"Dispatching {title}")
         print(page)
-        
-        send_to_all(title, page)
+        send_message_to_all(title, page)
 
-# get_news('https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko')
-sendNews('SBS', get_articles('http://news.sbs.co.kr/news/ReplayRssFeed.do'))
-sendNews('GeekNews', get_articles('https://news.hada.io/rss/news'))
+
+# Dispatch news
+dispatch_news('SBS', 'http://news.sbs.co.kr/news/ReplayRssFeed.do')
+dispatch_news('GeekNews', 'https://news.hada.io/rss/news')
